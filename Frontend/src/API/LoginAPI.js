@@ -1,61 +1,31 @@
-// Frontend/src/API/LoginAPI.js
-const BASE_URL = import.meta.env.VITE_BACKEND_URL;
+import API from "./api";
 
-// 🔐 LOGIN
-export async function loginUser(data) {
-  const res = await fetch(`${BASE_URL}/auth/login`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    credentials: "include", // 🔥 VERY IMPORTANT
-    body: JSON.stringify(data),
-  });
+/* 🔐 LOGIN */
+export const loginUser = async (data) => {
+  const res = await API.post("/auth/login", data);
+  return res.data;
+};
 
-  return res.json();
-}
+/* 👤 CURRENT USER */
+export const getCurrentUser = async () => {
+  const res = await API.get("/auth/me");
+  return res.data;
+};
 
-// 👤 GET CURRENT USER
-export async function getCurrentUser() {
-  const res = await fetch(`${BASE_URL}/auth/me`, {
-    credentials: "include",
-  });
+/* 🚪 LOGOUT */
+export const logoutUser = async () => {
+  const res = await API.post("/auth/logout");
+  return res.data;
+};
 
-  return res.json();
-}
+/* ➕ CREATE ADMIN */
+export const createAdmin = async (data) => {
+  const res = await API.post("/superadmin/create-admin", data);
+  return res.data;
+};
 
-// 🚪 LOGOUT
-export async function logoutUser() {
-  const res = await fetch(`${BASE_URL}/auth/logout`, {
-    method: "POST",
-    credentials: "include",
-  });
-
-  return res.json();
-}
-
-// ➕ CREATE Admin (SUPERADMIN ONLY)
-// create admin
-export async function createAdmin(data) {
-  const res = await fetch(`${BASE_URL}/superadmin/create-admin`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify(data),
-  });
-
-  return res.json();
-}
-
-// 👥 create support (admin + superadmin)
-
-export async function createSupport(data) {
-  const res = await fetch(`${BASE_URL}/superadmin/create-support`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify(data),
-  });
-
-  return res.json();
-}
+/* ➕ CREATE SUPPORT */
+export const createSupport = async (data) => {
+  const res = await API.post("/superadmin/create-support", data);
+  return res.data;
+};

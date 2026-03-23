@@ -1,14 +1,19 @@
-// Frontend/src/pages/techsupport/ChatSpace.jsx
 import { useState, useEffect } from "react";
 import styles from "./styles/ChatSpace.module.css";
-import { sendReply, endSession, fetchConversations } from "../../API/ChatAPI";
 
-const BASE = import.meta.env.VITE_BACKEND_URL;
+import {
+  sendReply,
+  endSession,
+  fetchConversations,
+  fetchMessages,
+  assignChat,
+  reopenChat,
+} from "../../API/ChatAPI";
 
 function ChatSpace() {
-  const [conversations, setConversations] = useState([]); // ✅ FIXED
-  const [selectedUser, setSelectedUser] = useState(null);
-  const [messages, setMessages] = useState([]); // ✅ NEW
+  const [conversations, setConversations] = useState([]);
+  const [selectedChat, setSelectedChat] = useState(null); // ✅ store full object
+  const [messages, setMessages] = useState([]);
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -29,17 +34,12 @@ function ChatSpace() {
     return () => clearInterval(interval);
   }, []);
 
-  // 🔥 Load messages when selecting chat
-  const handleSelectUser = async (senderId) => {
-    setSelectedUser(senderId);
+  // 🔥 Load messages
+  const handleSelectChat = async (chat) => {
+    setSelectedChat(chat);
 
     try {
-      const res = await fetch(
-        `${BASE}/webhook/conversations/${senderId}/messages`,
-        { credentials: "include" },
-      );
-
-      const data = await res.json();
+      const data = await fetchMessages(chat.id); // ✅ correct
       setMessages(data);
     } catch (err) {
       console.error("Failed to load messages", err);
@@ -47,34 +47,56 @@ function ChatSpace() {
   };
 
   const handleSendReply = async () => {
-    if (!selectedUser || !message.trim()) return;
+    if (!selectedChat || !message.trim()) return;
 
     try {
       setLoading(true);
-      await sendReply(selectedUser, message);
+      await sendReply(selectedChat.sender_id, message);
       setMessage("");
 
-      // 🔄 reload messages after sending
-      handleSelectUser(selectedUser);
+      const data = await fetchMessages(selectedChat.id);
+      setMessages(data);
     } catch (error) {
-      alert(error.response?.data?.error || "Failed to send reply");
+      alert(error?.error || "Failed to send reply");
     } finally {
       setLoading(false);
     }
   };
 
-  const handleEndSession = async () => {
-    if (!selectedUser) return;
+  const handleEnd = async () => {
+    if (!selectedChat) return;
 
     try {
-      await endSession(selectedUser);
-      alert("Session ended");
+      await endSession(selectedChat.id); // ✅ FIXED
+      alert("Chat ended");
     } catch (error) {
-      alert(error.response?.data?.error || "Failed to end session");
+      alert(error?.error || "Failed to end chat");
     }
   };
 
-  const currentChat = conversations.find((c) => c.sender_id === selectedUser);
+  const handleAssign = async () => {
+    if (!selectedChat) return;
+
+    try {
+      await assignChat(selectedChat.id);
+      alert("Assigned to you");
+    } catch (err) {
+      alert(err?.error || "Assign failed");
+    }
+  };
+
+  const handleReopen = async () => {
+    if (!selectedChat) return;
+
+    try {
+      await reopenChat(selectedChat.id);
+      alert("Chat reopened");
+    } catch (err) {
+      alert(err?.error || "Reopen failed");
+    }
+  };
+
+  const isEnded = selectedChat?.status === "ended";
 
   return (
     <div className={styles.container}>
@@ -86,9 +108,9 @@ function ChatSpace() {
           <div
             key={chat.id}
             className={`${styles.userItem} ${
-              selectedUser === chat.sender_id ? styles.activeUser : ""
+              selectedChat?.id === chat.id ? styles.activeUser : ""
             }`}
-            onClick={() => handleSelectUser(chat.sender_id)}
+            onClick={() => handleSelectChat(chat)}
           >
             <div>{chat.sender_id}</div>
           </div>
@@ -98,12 +120,15 @@ function ChatSpace() {
       {/* Chat Section */}
       <div className={styles.chat}>
         <div className={styles.chatHeader}>
-          {selectedUser ? (
+          {selectedChat ? (
             <>
-              <h3>{selectedUser}</h3>
+              <h3>{selectedChat.sender_id}</h3>
+
               <span className={styles.deptBadge}>
-                {currentChat?.department?.toUpperCase()}
+                {selectedChat.department_id}
               </span>
+
+              {isEnded && <span> (Ended)</span>}
             </>
           ) : (
             <h3>Select conversation</h3>
@@ -113,8 +138,7 @@ function ChatSpace() {
         {/* Messages */}
         <div className={styles.messages}>
           {messages.map((msg, index) => {
-            const isAgent =
-              msg.direction === "bot";
+            const isAgent = msg.direction === "outgoing";
 
             return (
               <div
@@ -131,6 +155,17 @@ function ChatSpace() {
           })}
         </div>
 
+        {/* Actions */}
+        <div className={styles.actions}>
+          <button onClick={handleAssign}>Assign</button>
+          <button onClick={handleReopen} disabled={!isEnded}>
+            Reopen
+          </button>
+          <button onClick={handleEnd} disabled={isEnded}>
+            End
+          </button>
+        </div>
+
         {/* Input */}
         <div className={styles.inputBox}>
           <input
@@ -138,23 +173,15 @@ function ChatSpace() {
             placeholder="Type message..."
             value={message}
             onChange={(e) => setMessage(e.target.value)}
-            disabled={!selectedUser || loading}
+            disabled={!selectedChat || loading || isEnded}
           />
 
           <button
             className={styles.sendBtn}
             onClick={handleSendReply}
-            disabled={loading}
+            disabled={loading || isEnded}
           >
             {loading ? "Sending..." : "Send"}
-          </button>
-
-          <button
-            className={styles.endBtn}
-            onClick={handleEndSession}
-            disabled={!selectedUser}
-          >
-            End
           </button>
         </div>
       </div>

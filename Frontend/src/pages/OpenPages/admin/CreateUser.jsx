@@ -1,12 +1,12 @@
+// Frontend/src/pages/OpenPages/admin/CreateUser.jsx
 import { useState, useEffect } from "react";
 import {
   createAdmin,
   createSupport,
   getCurrentUser,
 } from "../../../API/LoginAPI";
+import API from "../../../API/api"; // ✅ use axios instance
 import styles from "./styles/CreateUser.module.css";
-
-const BASE = import.meta.env.VITE_BACKEND_URL;
 
 export default function CreateUser() {
   const [form, setForm] = useState({
@@ -38,17 +38,17 @@ export default function CreateUser() {
     });
   }, []);
 
-  // 🔥 fetch dropdowns
+  // 🔥 fetch dropdowns (FIXED → axios)
   useEffect(() => {
     const fetchMeta = async () => {
       try {
         const [depRes, countryRes] = await Promise.all([
-          fetch(`${BASE}/meta/departments`),
-          fetch(`${BASE}/meta/countries`),
+          API.get("/meta/departments"),
+          API.get("/meta/countries"),
         ]);
 
-        setDepartments(await depRes.json());
-        setCountries(await countryRes.json());
+        setDepartments(depRes.data);
+        setCountries(countryRes.data);
       } catch (err) {
         console.error("Failed to fetch meta", err);
       }
@@ -61,34 +61,43 @@ export default function CreateUser() {
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
-  const isValid = form.name && form.email && form.password && form.country_id;
+  // ✅ improved validation
+  const isValid =
+    form.name &&
+    form.email &&
+    form.password &&
+    form.country_id &&
+    (roleToCreate === "admin" || form.department_id);
 
   const handleSubmit = async () => {
     if (!isValid) return alert("Please fill all required fields");
 
     setLoading(true);
-    let res;
 
     try {
-      res =
+      const res =
         roleToCreate === "admin"
           ? await createAdmin(form)
           : await createSupport(form);
 
       if (res?.id) {
         alert("User created ✅");
+
         setForm({
           name: "",
           email: "",
           password: "",
-          department_id: "",
+          department_id:
+            currentUser?.role === "admin"
+              ? currentUser.department_id // ✅ keep admin dept
+              : "",
           country_id: "",
         });
       } else {
         alert(res?.error || "Failed");
       }
-    } catch {
-      alert("Something went wrong");
+    } catch (err) {
+      alert(err?.response?.data?.error || "Something went wrong");
     } finally {
       setLoading(false);
     }
@@ -118,6 +127,7 @@ export default function CreateUser() {
           onChange={(e) => handleChange("password", e.target.value)}
         />
 
+        {/* SUPERADMIN ONLY */}
         {currentUser?.role === "superadmin" && (
           <>
             <select
@@ -144,6 +154,7 @@ export default function CreateUser() {
           </>
         )}
 
+        {/* COUNTRY */}
         <select
           value={form.country_id}
           onChange={(e) => handleChange("country_id", Number(e.target.value))}

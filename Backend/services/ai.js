@@ -3,7 +3,6 @@ import dotenv from "dotenv";
 
 import {
   getMessages,
-  isHumanActive,
   startHumanSession,
 } from "../store/conversations.js";
 import { pool } from "../db.js"; // ✅ ADD
@@ -40,7 +39,7 @@ import { yesWords, noWords } from "../services/departments.js";
 export async function processMessage(user, text) {
   const msg = text.toLowerCase().trim();
 
-  if (isHumanActive(user)) return null;
+  
   if (!departments.length) {
     await loadDepartments();
   }

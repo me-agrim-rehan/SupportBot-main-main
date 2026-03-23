@@ -1,70 +1,65 @@
-import axios from "axios";
-
-const API = axios.create({
-  baseURL: import.meta.env.VITE_BACKEND_URL,
-  headers: {
-    "Content-Type": "application/json",
-    "ngrok-skip-browser-warning": "true",
-  },
-  timeout: 10000,
-});
-
+import API from "./api";
 
 /* ========================
    SEND AGENT MESSAGE
 ======================== */
+export const sendReply = async (to, message) => {
+  const res = await API.post("/agent/reply", {
+    to,
+    message,
+  });
 
-export const sendReply = async (user, message) => {
-  try {
-    const res = await API.post("/agent/reply", {
-      to: user,
-      message,
-    });
-
-    return res.data;
-  } catch (err) {
-    console.error("sendReply error:", err.response?.data || err.message);
-    throw err.response?.data || err;
-  }
+  return res.data;
 };
-
 
 /* ========================
-   END HUMAN SESSION
+   END CHAT
 ======================== */
+export const endSession = async (conversation_id) => {
+  const res = await API.post("/agent/end", {
+    conversation_id,
+  });
 
-export const endSession = async (user) => {
-  try {
-    const res = await API.post("/agent/end", {
-      user,
-    });
-
-    return res.data;
-  } catch (err) {
-    console.error("endSession error:", err.response?.data || err.message);
-    throw err.response?.data || err;
-  }
+  return res.data;
 };
 
+/* ========================
+   ASSIGN CHAT
+======================== */
+export const assignChat = async (conversation_id) => {
+  const res = await API.post("/agent/assign", {
+    conversation_id,
+  });
+
+  return res.data;
+};
+
+/* ========================
+   REOPEN CHAT
+======================== */
+export const reopenChat = async (conversation_id) => {
+  const res = await API.post("/agent/reopen", {
+    conversation_id,
+  });
+
+  return res.data;
+};
 
 /* ========================
    FETCH CONVERSATIONS
 ======================== */
+export const fetchConversations = async () => {
+  const res = await API.get("/webhook/conversations");
+  return res.data;
+};
 
-// Frontend/src/API/ChatAPI.js
+/* ========================
+   FETCH MESSAGES
+======================== */
+export const fetchMessages = async (conversation_id) => {
+  const res = await API.get(
+    `/webhook/conversations/${conversation_id}/messages`,
+  );
 
-const BASE_URL = import.meta.env.VITE_BACKEND_URL;
-
-export async function fetchConversations() {
-  try {
-    const res = await fetch(`${BASE_URL}/webhook/conversations`, {
-      method: "GET",
-      credentials: "include", // 🔥 THIS FIXES YOUR ISSUE
-    });
-
-    return await res.json();
-
-  } catch (err) {
-    console.error("fetchConversations error:", err);
-  }
-}
+  return res.data;
+};
