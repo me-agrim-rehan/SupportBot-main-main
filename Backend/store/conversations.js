@@ -213,3 +213,20 @@ export function getAllConversations() {
 
   return result;
 }
+export async function getMessages(phone) {
+  try {
+    const res = await pool.query(
+      `SELECT id FROM conversations WHERE sender_id = $1 LIMIT 1`,
+      [phone]
+    );
+
+    if (res.rows.length === 0) return [];
+
+    const conversationId = res.rows[0].id;
+
+    return await getMessagesByConversationId(conversationId);
+  } catch (err) {
+    console.error(err);
+    return [];
+  }
+}

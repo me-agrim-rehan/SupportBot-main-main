@@ -138,10 +138,10 @@ Reply Yes or No`;
 ========================= */
 
 async function runAIChat(user, text) {
-  const history = getMessages(user);
+  const history = await getMessages(user);
 
   const formatted = history.map((m) => {
-    if (m.sender === "user") return `User: ${m.text}`;
+    if (m.direction === "inbound") return `User: ${m.text}`;
     return `Assistant: ${m.text}`;
   });
 
