@@ -91,43 +91,45 @@ router.get("/conversations", async (req, res) => {
     // 👑 SUPERADMIN → ALL
     if (user.role === "superadmin") {
       query = `
-        SELECT c.id, c.sender_id, c.country_id, c.department,
-               c.assigned_to,
-               MAX(c.created_at) as last_time
+        SELECT c.*, MAX(c.created_at) as last_time
         FROM conversations c
-        GROUP BY c.sender_id, c.id
+        GROUP BY c.id
         ORDER BY last_time DESC
       `;
     }
 
-    // 🧑‍💼 ADMIN → department only
+    // 🧑‍💼 ADMIN → department only (all chats)
     else if (user.role === "admin") {
       query = `
-        SELECT c.id, c.sender_id, c.country_id, c.department,
-               c.assigned_to,
-               MAX(c.created_at) as last_time
+        SELECT c.*, MAX(c.created_at) as last_time
         FROM conversations c
-        WHERE c.department = $1
-        GROUP BY c.sender_id, c.id
+        WHERE c.department_id = $1
+        GROUP BY c.id
         ORDER BY last_time DESC
       `;
-      params = [user.department]; // 🔥 string match
+      params = [user.department_id];
     }
 
-    // 👨‍💻 SUPPORT → filtered
+    // 👨‍💻 SUPPORT → strict filtering
     else if (user.role === "support") {
       query = `
-        SELECT c.id, c.sender_id, c.country_id, c.department,
-               c.assigned_to,
-               MAX(c.created_at) as last_time
+        SELECT c.*, MAX(c.created_at) as last_time
         FROM conversations c
-        WHERE c.department = $1
+        WHERE c.department_id = $1
         AND c.country_id = $2
-        AND (c.assigned_to IS NULL OR c.assigned_to = $3)
-        GROUP BY c.sender_id, c.id
+        AND (
+          c.status = 'active'
+          OR (
+            c.status = 'ended'
+            AND c.assigned_to = $3
+            AND c.ended_at > NOW() - INTERVAL '48 hours'
+          )
+        )
+        AND c.assigned_to = $3
+        GROUP BY c.id
         ORDER BY last_time DESC
       `;
-      params = [user.department, user.country_id, user.id];
+      params = [user.department_id, user.country_id, user.id];
     }
 
     const result = await pool.query(query, params);
@@ -138,7 +140,6 @@ router.get("/conversations", async (req, res) => {
     res.status(500).json({ error: "Failed to fetch conversations" });
   }
 });
-
 router.get("/conversations/:id/messages", async (req, res) => {
   const { id } = req.params;
 
