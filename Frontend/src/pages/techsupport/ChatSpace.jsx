@@ -233,6 +233,16 @@ function ChatSpace() {
                   className={isAgent ? styles.agentMessage : styles.userMessage}
                 >
                   {msg.text}
+
+                  {isAgent && (
+                    <span className={styles.status}>
+                      {msg.status === "sent" && "✓"}
+                      {msg.status === "delivered" && "✓✓"}
+                      {msg.status === "read" && (
+                        <span style={{ color: "#53bdeb" }}>✓✓</span>
+                      )}
+                    </span>
+                  )}
                 </div>
               </div>
             );
