@@ -10,12 +10,17 @@ const router = express.Router();
  * 📤 REPLY TO USER
  */
 router.post("/reply", async (req, res) => {
-  const { to, message } = req.body; // ❌ removed force
+  const { to, message } = req.body;
 
-  if (!to || !message || !message.trim()) {
-    return res.status(400).json({
-      error: "Missing or invalid fields",
-    });
+  // =========================
+  // ✅ VALIDATION
+  // =========================
+  if (!to || typeof to !== "string") {
+    return res.status(400).json({ error: "Invalid recipient" });
+  }
+
+  if (!message || !message.trim()) {
+    return res.status(400).json({ error: "Message required" });
   }
 
   const user = req.session.user;
@@ -24,12 +29,13 @@ router.post("/reply", async (req, res) => {
   }
 
   try {
+    // =========================
+    // 📥 GET CONVERSATION
+    // =========================
     const convoRes = await pool.query(
-      `SELECT c.*, d.name AS department_name,
-              u.role AS assigned_role,
-              u.email AS assigned_email
+      `SELECT c.*, 
+              u.role AS assigned_role
        FROM conversations c
-       LEFT JOIN departments d ON c.department_id = d.id
        LEFT JOIN users u ON c.assigned_to = u.id
        WHERE c.sender_id = $1
        ORDER BY c.created_at DESC
@@ -43,14 +49,12 @@ router.post("/reply", async (req, res) => {
       return res.status(404).json({ error: "No conversation found" });
     }
 
-  
     if (!conversation.department_id) {
       return res.status(403).json({
         error: "Department not assigned yet",
       });
     }
 
-  
     if (conversation.status !== "active") {
       return res.status(403).json({
         error: "Chat is ended. Please reopen to continue.",
@@ -58,12 +62,10 @@ router.post("/reply", async (req, res) => {
     }
 
     // =========================
-    // support
+    // 👨‍💻 SUPPORT RULES
     // =========================
-
-    // 👨‍💻 SUPPORT
     if (user.role === "support") {
-      // dept + country restriction
+      // dept + country
       if (
         user.department_id !== conversation.department_id ||
         user.country_id !== conversation.country_id
@@ -73,53 +75,68 @@ router.post("/reply", async (req, res) => {
         });
       }
 
-      // ❌ if assigned to admin/superadmin → hard block
+      // ❌ cannot override admin/superadmin
       if (
         conversation.assigned_role === "admin" ||
         conversation.assigned_role === "superadmin"
       ) {
         return res.status(403).json({
-          error: `Chat is handled by ${conversation.assigned_role}`,
+          error: `Chat handled by ${conversation.assigned_role}`,
         });
       }
 
-      // 🟢 if unassigned → auto assign
+      // 🟢 assign if unassigned
       if (!conversation.assigned_to) {
         await pool.query(
           `UPDATE conversations
            SET assigned_to = $1,
                assigned_role = $2
-           WHERE id = $3`,
+           WHERE id = $3 AND assigned_to IS NULL`,
           [user.id, user.role, conversation.id],
         );
       }
 
-      // 🔁 if assigned to another support
+      // 🔁 takeover support chat (after 20 min)
       if (conversation.assigned_to && conversation.assigned_to !== user.id) {
         const lastReply = conversation.last_agent_reply_at;
 
+        if (!lastReply) {
+          return res.status(403).json({
+            error: "Chat just started, cannot take over yet",
+          });
+        }
+
         const isInactive =
-          !lastReply ||
           new Date(lastReply) < new Date(Date.now() - 20 * 60 * 1000);
 
         if (!isInactive) {
           return res.status(403).json({
-            error: "Another support agent is active on this chat",
+            error: "Another support agent is active",
           });
         }
 
-        // ✅ takeover after inactivity
-        await pool.query(
+        // ✅ race-safe takeover
+        const result = await pool.query(
           `UPDATE conversations
            SET assigned_to = $1,
                assigned_role = $2
-           WHERE id = $3`,
+           WHERE id = $3
+           AND last_agent_reply_at < NOW() - INTERVAL '20 minutes'
+           RETURNING id`,
           [user.id, user.role, conversation.id],
         );
+
+        if (result.rowCount === 0) {
+          return res.status(409).json({
+            error: "Chat was taken by another agent",
+          });
+        }
       }
     }
 
-    // 🧑‍💼 ADMIN
+    // =========================
+    // 🧑‍💼 ADMIN RULES
+    // =========================
     if (user.role === "admin") {
       if (user.department_id !== conversation.department_id) {
         return res.status(403).json({
@@ -127,7 +144,15 @@ router.post("/reply", async (req, res) => {
         });
       }
 
-      if (conversation.assigned_to !== user.id)  {
+      // ❌ cannot override superadmin
+      if (conversation.assigned_role === "superadmin") {
+        return res.status(403).json({
+          error: "Handled by superadmin",
+        });
+      }
+
+      // always take over
+      if (conversation.assigned_to !== user.id) {
         await pool.query(
           `UPDATE conversations
            SET assigned_to = $1,
@@ -138,9 +163,11 @@ router.post("/reply", async (req, res) => {
       }
     }
 
-    // 👑 SUPERADMIN
+    // =========================
+    // 👑 SUPERADMIN RULES
+    // =========================
     if (user.role === "superadmin") {
-      if (conversation.assigned_to !== user.id){
+      if (conversation.assigned_to !== user.id) {
         await pool.query(
           `UPDATE conversations
            SET assigned_to = $1,
@@ -154,20 +181,15 @@ router.post("/reply", async (req, res) => {
     // =========================
     // 📤 SEND MESSAGE
     // =========================
-
     const cleanMessage = message.trim();
 
-const messageId = await sendMessage(to, cleanMessage);
+    const messageId = await sendMessage(to, cleanMessage);
 
-await addMessage(
-  to,
-  "outgoing",
-  cleanMessage,
-  messageId,
-  "sent"
-);
+    await addMessage(to, "outgoing", cleanMessage, messageId, "sent");
 
-    // ⏱️ update activity tracking
+    // =========================
+    // ⏱️ TRACK ACTIVITY
+    // =========================
     await pool.query(
       `UPDATE conversations
        SET last_agent_reply_at = NOW(),
@@ -176,14 +198,14 @@ await addMessage(
       [user.id, conversation.id],
     );
 
-    res.json({
+    return res.json({
       success: true,
       conversationId: conversation.id,
     });
   } catch (err) {
     console.error("Agent reply error:", err.message);
 
-    res.status(500).json({
+    return res.status(500).json({
       error: "Failed to send message",
     });
   }
@@ -195,74 +217,120 @@ router.post("/reopen", async (req, res) => {
   const user = req.session.user;
   const { conversation_id } = req.body;
 
-  if (!user) return res.status(401).json({ error: "Unauthorized" });
-
-  const convRes = await pool.query(
-    `SELECT * FROM conversations WHERE id = $1`,
-    [conversation_id],
-  );
-
-  const convo = convRes.rows[0];
-  if (!convo) return res.status(404).json({ error: "Not found" });
-
   // =========================
-  // 👨‍💻 SUPPORT → STRICT RULES
+  // ✅ VALIDATION
   // =========================
-  if (user.role === "support") {
-    // 🔒 block if another active chat exists (ONLY for support)
-    const active = await pool.query(
-      `SELECT id FROM conversations
-       WHERE sender_id = $1
-       AND status = 'active'
-       LIMIT 1`,
-      [convo.sender_id],
+  if (!user) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  if (!conversation_id) {
+    return res.status(400).json({
+      error: "conversation_id required",
+    });
+  }
+
+  try {
+    // =========================
+    // 📥 GET CONVERSATION
+    // =========================
+    const convRes = await pool.query(
+      `SELECT * FROM conversations WHERE id = $1`,
+      [conversation_id],
     );
 
-    if (active.rows.length > 0) {
-      return res.status(403).json({
-        error: "User already has an active chat",
+    const convo = convRes.rows[0];
+
+    if (!convo) {
+      return res.status(404).json({ error: "Not found" });
+    }
+
+    // 🔒 prevent reopening active chat
+    if (convo.status === "active") {
+      return res.status(400).json({
+        error: "Chat already active",
       });
     }
 
-    // 👨‍💻 SUPPORT → 48h + dept + country
-    const isWithin48h =
-      convo.ended_at &&
-      new Date(convo.ended_at) > new Date(Date.now() - 48 * 60 * 60 * 1000);
+    // =========================
+    // 👨‍💻 SUPPORT RULES
+    // =========================
+    if (user.role === "support") {
+      // 🔒 block if another active chat exists (exclude this convo)
+      const active = await pool.query(
+        `SELECT id FROM conversations
+         WHERE sender_id = $1
+         AND status = 'active'
+         AND id != $2
+         LIMIT 1`,
+        [convo.sender_id, conversation_id],
+      );
 
-    const allowed =
-      user.department_id === convo.department_id &&
-      user.country_id === convo.country_id &&
-      isWithin48h;
+      if (active.rows.length > 0) {
+        return res.status(403).json({
+          error: "User already has an active chat",
+        });
+      }
 
-    if (!allowed) {
-      return res.status(403).json({
-        error: "Cannot reopen this chat",
+      // ⏱️ within 48h
+      const isWithin48h =
+        convo.ended_at &&
+        new Date(convo.ended_at) > new Date(Date.now() - 48 * 60 * 60 * 1000);
+
+      const allowed =
+        user.department_id === convo.department_id &&
+        user.country_id === convo.country_id &&
+        isWithin48h;
+
+      if (!allowed) {
+        return res.status(403).json({
+          error: "Cannot reopen this chat",
+        });
+      }
+    }
+
+    // =========================
+    // 🧑‍💼 ADMIN RULES
+    // =========================
+    if (user.role === "admin") {
+      if (user.department_id !== convo.department_id) {
+        return res.status(403).json({
+          error: "Wrong department",
+        });
+      }
+    }
+
+    // 👑 SUPERADMIN → always allowed
+
+    // =========================
+    // 🔁 REOPEN (RACE SAFE)
+    // =========================
+    const result = await pool.query(
+      `UPDATE conversations
+       SET status = 'active',
+           ended_at = NULL,
+           assigned_to = NULL,
+           assigned_role = NULL
+       WHERE id = $1
+       AND status = 'ended'
+       RETURNING id`,
+      [conversation_id],
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(409).json({
+        error: "Chat already reopened",
       });
     }
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error("Reopen error:", err.message);
+
+    return res.status(500).json({
+      error: "Failed to reopen chat",
+    });
   }
-
-  // 🧑‍💼 ADMIN → dept only
-  if (user.role === "admin") {
-    if (user.department_id !== convo.department_id) {
-      return res.status(403).json({
-        error: "Wrong department",
-      });
-    }
-  }
-
-  // 👑 SUPERADMIN → allowed
-
-  await pool.query(
-    `UPDATE conversations
-     SET status = 'active',
-         ended_at = NULL,
-         assigned_to = NULL
-         assigned_role = NULL
-     WHERE id = $1`,
-    [conversation_id],
-  );
-
-  res.json({ success: true });
 });
 
 /**
@@ -272,6 +340,9 @@ router.post("/assign", async (req, res) => {
   const user = req.session.user;
   const { conversation_id } = req.body;
 
+  // ========================
+  // ✅ VALIDATION
+  // =========================
   if (!user) {
     return res.status(401).json({ error: "Unauthorized" });
   }
@@ -281,8 +352,14 @@ router.post("/assign", async (req, res) => {
   }
 
   try {
+    // =========================
+    // 📥 GET CONVERSATION
+    // =========================
     const convo = await pool.query(
-      `SELECT * FROM conversations WHERE id = $1`,
+      `SELECT c.*, u.role AS assigned_role
+       FROM conversations c
+       LEFT JOIN users u ON c.assigned_to = u.id
+       WHERE c.id = $1`,
       [conversation_id],
     );
 
@@ -292,7 +369,6 @@ router.post("/assign", async (req, res) => {
       return res.status(404).json({ error: "Conversation not found" });
     }
 
-    // 🔒 prevent assigning ended chat
     if (c.status !== "active") {
       return res.status(403).json({
         error: "Cannot assign ended chat",
@@ -303,7 +379,6 @@ router.post("/assign", async (req, res) => {
     // 👨‍💻 SUPPORT RULES
     // =========================
     if (user.role === "support") {
-      // dept + country check
       if (
         user.department_id !== c.department_id ||
         user.country_id !== c.country_id
@@ -313,10 +388,189 @@ router.post("/assign", async (req, res) => {
         });
       }
 
-      // ❌ if already assigned
-      if (c.assigned_to) {
+      // ❌ cannot override admin/superadmin
+      if (c.assigned_role === "admin" || c.assigned_role === "superadmin") {
         return res.status(403).json({
-          error: "Chat already assigned",
+          error: `Chat handled by ${c.assigned_role}`,
+        });
+      }
+
+      // 🟢 assign if unassigned
+      if (!c.assigned_to) {
+        const result = await pool.query(
+          `UPDATE conversations
+           SET assigned_to = $1,
+               assigned_role = $2
+           WHERE id = $3 AND assigned_to IS NULL
+           RETURNING id, assigned_to, assigned_role`,
+          [user.id, user.role, conversation_id],
+        );
+
+        if (result.rowCount === 0) {
+          return res.status(409).json({
+            error: "Chat already taken",
+          });
+        }
+
+        return res.json({
+          success: true,
+          conversation: result.rows[0],
+        });
+      }
+
+      // 🔁 takeover support chat after 20 min
+      const lastReply = c.last_agent_reply_at;
+
+      if (!lastReply) {
+        return res.status(403).json({
+          error: "Chat just started, cannot take over yet",
+        });
+      }
+
+      const isInactive =
+        new Date(lastReply) < new Date(Date.now() - 20 * 60 * 1000);
+
+      if (!isInactive) {
+        return res.status(403).json({
+          error: "Another support agent is active",
+        });
+      }
+
+      // ✅ race-safe takeover
+      const result = await pool.query(
+        `UPDATE conversations
+         SET assigned_to = $1,
+             assigned_role = $2
+         WHERE id = $3
+         AND last_agent_reply_at < NOW() - INTERVAL '20 minutes'
+         RETURNING id, assigned_to, assigned_role`,
+        [user.id, user.role, conversation_id],
+      );
+
+      if (result.rowCount === 0) {
+        return res.status(409).json({
+          error: "Chat already taken",
+        });
+      }
+
+      return res.json({
+        success: true,
+        conversation: result.rows[0],
+      });
+    }
+
+    // =========================
+    // 🧑‍💼 ADMIN RULES
+    // =========================
+    if (user.role === "admin") {
+      if (user.department_id !== c.department_id) {
+        return res.status(403).json({
+          error: "Wrong department",
+        });
+      }
+
+      // ❌ cannot override superadmin
+      if (c.assigned_role === "superadmin") {
+        return res.status(403).json({
+          error: "Handled by superadmin",
+        });
+      }
+
+      const result = await pool.query(
+        `UPDATE conversations
+         SET assigned_to = $1,
+             assigned_role = $2
+         WHERE id = $3
+         RETURNING id, assigned_to, assigned_role`,
+        [user.id, user.role, conversation_id],
+      );
+
+      return res.json({
+        success: true,
+        conversation: result.rows[0],
+      });
+    }
+
+    // =========================
+    // 👑 SUPERADMIN RULES
+    // =========================
+    if (user.role === "superadmin") {
+      const result = await pool.query(
+        `UPDATE conversations
+         SET assigned_to = $1,
+             assigned_role = $2
+         WHERE id = $3
+         RETURNING id, assigned_to, assigned_role`,
+        [user.id, user.role, conversation_id],
+      );
+
+      return res.json({
+        success: true,
+        conversation: result.rows[0],
+      });
+    }
+
+    return res.status(403).json({
+      error: "Invalid role",
+    });
+  } catch (err) {
+    console.error("Assign error:", err.message);
+
+    return res.status(500).json({
+      error: "Failed to assign conversation",
+    });
+  }
+});
+
+/**
+ * 🔚 END CHAT
+ */
+router.post("/end", async (req, res) => {
+  const user = req.session.user;
+  const { conversation_id } = req.body;
+
+  // =========================
+  // ✅ VALIDATION
+  // =========================
+  if (!user) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  if (!conversation_id) {
+    return res.status(400).json({
+      error: "conversation_id required",
+    });
+  }
+
+  try {
+    // =========================
+    // 📥 GET CONVERSATION
+    // =========================
+    const convo = await pool.query(
+      `SELECT * FROM conversations WHERE id = $1`,
+      [conversation_id],
+    );
+
+    const c = convo.rows[0];
+
+    if (!c) {
+      return res.status(404).json({ error: "Not found" });
+    }
+
+    // 🔒 already ended
+    if (c.status === "ended") {
+      return res.status(400).json({
+        error: "Chat already ended",
+      });
+    }
+
+    // =========================
+    // 👨‍💻 SUPPORT RULES
+    // =========================
+    if (user.role === "support") {
+      if (c.assigned_to !== user.id) {
+        return res.status(403).json({
+          error: "Not your chat",
         });
       }
     }
@@ -332,84 +586,37 @@ router.post("/assign", async (req, res) => {
       }
     }
 
-    // =========================
-    // ✅ ASSIGN CHAT
-    // =========================
+    // 👑 SUPERADMIN → always allowed
 
+    // =========================
+    // 🔚 END CHAT (RACE SAFE)
+    // =========================
     const result = await pool.query(
       `UPDATE conversations
-       SET assigned_to = $1,
-           assigned_role = $2
-       WHERE id = $3
-       RETURNING id, assigned_to, assigned_role`,
-      [user.id, user.role, conversation_id],
+       SET status = 'ended',
+           ended_at = NOW(),
+           assigned_to = NULL,
+           assigned_role = NULL
+       WHERE id = $1
+       AND status = 'active'
+       RETURNING id`,
+      [conversation_id],
     );
 
-    res.json({
-      success: true,
-      conversation: result.rows[0],
-    });
+    if (result.rowCount === 0) {
+      return res.status(409).json({
+        error: "Chat already ended",
+      });
+    }
+
+    return res.json({ success: true });
   } catch (err) {
-    console.error("Assign error:", err.message);
+    console.error("End chat error:", err.message);
 
-    res.status(500).json({
-      error: "Failed to assign conversation",
+    return res.status(500).json({
+      error: "Failed to end chat",
     });
   }
-});
-
-/**
- * 🔚 END CHAT
- */
-router.post("/end", async (req, res) => {
-  const user = req.session.user;
-  const { conversation_id } = req.body;
-
-  if (!user) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-
-  const convo = await pool.query(`SELECT * FROM conversations WHERE id = $1`, [
-    conversation_id,
-  ]);
-
-  const c = convo.rows[0];
-  if (!c) return res.status(404).json({ error: "Not found" });
-
-  // 🔒 prevent ending already ended chat
-  if (c.status === "ended") {
-    return res.status(400).json({
-      error: "Chat already ended",
-    });
-  }
-
-  // 👨‍💻 SUPPORT → only own assigned chat
-  if (user.role === "support") {
-    if (c.assigned_to !== user.id) {
-      return res.status(403).json({
-        error: "Not your chat",
-      });
-    }
-  }
-
-  // 🧑‍💼 ADMIN → dept only
-  if (user.role === "admin") {
-    if (user.department_id !== c.department_id) {
-      return res.status(403).json({
-        error: "Wrong department",
-      });
-    }
-  }
-
-  await pool.query(
-    `UPDATE conversations
-     SET status = 'ended',
-         ended_at = NOW()
-     WHERE id = $1`,
-    [conversation_id],
-  );
-
-  res.json({ success: true });
 });
 
 export default router;

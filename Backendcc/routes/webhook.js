@@ -10,8 +10,7 @@ import {
   addMessage,
   getOrCreateConversation,
 } from "../store/conversations.js";
-
-import { detectCountry } from "../services/country.js";
+import { resolveCountry } from "../services/country.js";
 
 const router = express.Router();
 
@@ -30,86 +29,105 @@ router.get("/", (req, res) => {
   res.sendStatus(403);
 });
 
-
 router.post("/", async (req, res) => {
+  // ✅ respond immediately (Meta requires fast response)
   res.sendStatus(200);
 
   try {
+    const entry = req.body?.entry?.[0];
+    const change = entry?.changes?.[0];
+    const value = change?.value;
 
-    const value = req.body?.entry?.[0]?.changes?.[0]?.value;
+    if (!value) return;
 
-    if (value?.statuses) {
+    /* =========================
+       ✅ STATUS UPDATES (SAFE)
+    ========================= */
+    if (Array.isArray(value.statuses)) {
       for (const status of value.statuses) {
+        const messageId = status?.id;
+        const state = status?.status;
 
-        const messageId = status.id;
-        const state = status.status;
+        // ✅ strict validation
+        if (!messageId || !["delivered", "read"].includes(state)) continue;
 
         if (state === "delivered") {
           await pool.query(
-            `
-            UPDATE messages
-            SET status = 'delivered',
-                delivered_at = NOW()
-            WHERE whatsapp_message_id = $1
-            `,
-            [messageId]
+            `UPDATE messages
+             SET status = 'delivered',
+                 delivered_at = NOW()
+             WHERE whatsapp_message_id = $1`,
+            [messageId],
           );
         }
 
         if (state === "read") {
           await pool.query(
-            `
-            UPDATE messages
-            SET status = 'read',
-                read_at = NOW()
-            WHERE whatsapp_message_id = $1
-            `,
-            [messageId]
+            `UPDATE messages
+             SET status = 'read',
+                 read_at = NOW()
+             WHERE whatsapp_message_id = $1`,
+            [messageId],
           );
         }
       }
-
-      return; // stop processing after status update
+      return;
     }
 
-    const message = req.body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
-    if (!message || !message.text) return;
+    /* =========================
+       ✅ MESSAGE VALIDATION
+    ========================= */
+    const message = value.messages?.[0];
+
+    if (!message) return;
 
     const from = message.from;
-    const text = message.text.body;
+    const text = message.text?.body || null;
 
-    // ✅ ensure conversation exists
-    await getOrCreateConversation(from);
+    // ✅ reject invalid sender
+    if (!from || typeof from !== "string") return;
 
-    // 🌍 Detect country
-    const country = detectCountry(from);
+    // ✅ optional: ignore non-text safely
+    if (!text) {
+      console.log("⚠️ Non-text message ignored:", message.type);
+      return;
+    }
 
-    if (country) {
+    /* =========================
+       🌍 COUNTRY (SAFE + ONCE)
+    ========================= */
+    const country = await resolveCountry(from);
+
+    if (country?.id) {
       await pool.query(
         `UPDATE conversations
          SET country_id = $1
-         WHERE sender_id = $2`,
+         WHERE sender_id = $2
+         AND country_id IS NULL`,
         [country.id, from],
       );
     }
 
-    // 💾 Save incoming
+    /* =========================
+       💾 SAVE INCOMING
+    ========================= */
     await addMessage(from, "incoming", text);
 
-    // 🤖 AI response
-    const reply = await processMessage(from, text);
-    if (!reply) return;
+    /* =========================
+       🤖 ASYNC RESPONSE (NON-BLOCKING)
+    ========================= */
+    setImmediate(async () => {
+      try {
+        const reply = await processMessage(from, text);
+        if (!reply) return;
 
-const messageId = await sendMessage(from, reply);
+        const messageId = await sendMessage(from, reply);
 
-await addMessage(
-  from,
-  "outgoing",
-  reply,
-  messageId,
-  "sent"
-);
-
+        await addMessage(from, "outgoing", reply, messageId, "sent");
+      } catch (err) {
+        console.error("Async reply error:", err);
+      }
+    });
   } catch (err) {
     console.error("Webhook error:", err);
   }
