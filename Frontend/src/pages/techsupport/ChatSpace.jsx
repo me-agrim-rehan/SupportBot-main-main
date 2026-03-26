@@ -15,11 +15,19 @@ function ChatSpace() {
   const [selectedChat, setSelectedChat] = useState(null);
   const [messages, setMessages] = useState([]);
   const [message, setMessage] = useState("");
+  const [currentTime, setCurrentTime] = useState(() => Date.now());
 
   const [modal, setModal] = useState(null); // 🔥 custom modal
 
   const currentUser = JSON.parse(localStorage.getItem("user"));
 
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentTime(Date.now());
+    }, 60000);
+
+    return () => clearInterval(interval);
+  }, []);
   // 🔁 Load conversations
   useEffect(() => {
     const loadConversations = async () => {
@@ -46,24 +54,33 @@ function ChatSpace() {
     const isMine = selectedChat.assigned_to === currentUser?.id;
     const isUnassigned = !selectedChat.assigned_to;
 
-    const isAdminOwned =
-      selectedChat.assigned_role === "admin" ||
-      selectedChat.assigned_role === "superadmin";
+    const isSuperadminChat = selectedChat.assigned_role === "superadmin";
+
+    const lastReply = selectedChat.last_agent_reply_at;
+    const minutesSinceReply = lastReply
+      ? Math.floor((currentTime - new Date(lastReply)) / 60000)
+      : null;
 
     return {
       isMine,
       isUnassigned,
+      isSuperadminChat,
+      minutesSinceReply,
 
-      isBlocked:
+      // ❌ block takeover of superadmin chats
+      cannotTakeover: isSuperadminChat && !isMine,
+
+      // 👨‍💻 support rule
+      supportCanTakeover:
         currentUser.role === "support" &&
         selectedChat.assigned_to &&
         !isMine &&
-        isAdminOwned,
+        minutesSinceReply >= 20,
 
       canReply:
         !isEnded && (isUnassigned || isMine || currentUser.role !== "support"),
 
-      disableAll: false, // 🔥 allow takeover UI always
+      disableAssign: isSuperadminChat && !isMine, // 🔥 important
     };
   };
 
@@ -97,21 +114,35 @@ function ChatSpace() {
   };
 
   // 🟢 ASSIGN
-  const handleAssign = async (force = false) => {
-    try {
-      await assignChat(selectedChat.id, force);
-    } catch (err) {
-      if (err?.takeover) {
-        openModal(`Take over chat from ${err.assigned_role}?`, () =>
-          handleAssign(true),
-        );
-      }
+  const handleAssign = async () => {
+    if (!selectedChat) return;
+
+    const isAssigned = selectedChat.assigned_to;
+
+    // ❌ block superadmin chat
+    if (chatState.cannotTakeover) {
+      openModal("❌ Cannot take over a Superadmin chat");
+      return;
     }
+
+    // 🧑‍💼 ADMIN / 👑 SUPERADMIN CONFIRMATION
+    if (isAssigned && !chatState.isMine) {
+      openModal(
+        `Take over chat from ${selectedChat.assigned_role}?`,
+        async () => {
+          await assignChat(selectedChat.id);
+        },
+      );
+      return;
+    }
+
+    // 🟢 normal assign
+    await assignChat(selectedChat.id);
   };
 
   // 🔚 END
   const handleEnd = () => {
-    openModal("End this chat?", async () => {
+    openModal("⚠️ Are you sure you want to END this chat?", async () => {
       await endSession(selectedChat.id);
     });
   };
@@ -163,6 +194,13 @@ function ChatSpace() {
               <h3>{selectedChat.sender_id}</h3>
 
               <div className={styles.metaInfo}>
+                {selectedChat.assigned_to &&
+                  selectedChat.assigned_role === "support" &&
+                  !chatState.isMine && (
+                    <span className={styles.timer}>
+                      ⏱️ {chatState.minutesSinceReply ?? 0} min since last reply
+                    </span>
+                  )}
                 <span className={styles.deptBadge}>
                   Dept: {selectedChat.department_id}
                 </span>
@@ -202,6 +240,11 @@ function ChatSpace() {
         </div>
 
         {/* Warning */}
+        {chatState.cannotTakeover && (
+          <div className={styles.warning}>
+            🚫 Superadmin chat cannot be taken over
+          </div>
+        )}
         {selectedChat && chatState.isBlocked && (
           <div className={styles.warning}>
             ⚠️ Chat handled by {selectedChat.assigned_role}
@@ -210,7 +253,7 @@ function ChatSpace() {
 
         {/* Actions */}
         <div className={styles.actions}>
-          <button onClick={handleAssign} disabled={chatState.disableAll}>
+          <button onClick={handleAssign} disabled={chatState.disableAssign}>
             Assign
           </button>
 
