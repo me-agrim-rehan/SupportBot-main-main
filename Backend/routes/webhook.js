@@ -116,16 +116,19 @@ router.get("/conversations", async (req, res) => {
         SELECT c.*, MAX(c.created_at) as last_time
         FROM conversations c
         WHERE c.department_id = $1
-        AND c.country_id = $2
-        AND (
-          c.status = 'active'
-          OR (
-            c.status = 'ended'
-            AND c.assigned_to = $3
-            AND c.ended_at > NOW() - INTERVAL '48 hours'
-          )
-        )
-        AND c.assigned_to = $3
+AND c.country_id = $2
+AND (
+  c.status = 'active'
+  OR (
+    c.status = 'ended'
+    AND c.assigned_to = $3
+    AND c.ended_at > NOW() - INTERVAL '48 hours'
+  )
+)
+AND (
+  c.assigned_to = $3
+  OR c.assigned_to IS NULL
+)
         GROUP BY c.id
         ORDER BY last_time DESC
       `;
