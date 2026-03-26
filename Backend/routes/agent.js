@@ -10,7 +10,8 @@ const router = express.Router();
  * 📤 REPLY TO USER
  */
 router.post("/reply", async (req, res) => {
-  const { to, message } = req.body;
+  const { to, message, force } = req.body;
+  // 🔥 force = true → confirmed takeover
 
   if (!to || !message || !message.trim()) {
     return res.status(400).json({
@@ -24,11 +25,14 @@ router.post("/reply", async (req, res) => {
   }
 
   try {
-    // ✅ get latest conversation
+    // ✅ get latest conversation + assigned user info
     const convoRes = await pool.query(
-      `SELECT c.*, d.name AS department_name
+      `SELECT c.*, d.name AS department_name,
+              u.role AS assigned_role,
+              u.email AS assigned_email
        FROM conversations c
        LEFT JOIN departments d ON c.department_id = d.id
+       LEFT JOIN users u ON c.assigned_to = u.id
        WHERE c.sender_id = $1
        ORDER BY c.created_at DESC
        LIMIT 1`,
@@ -55,39 +59,13 @@ router.post("/reply", async (req, res) => {
       });
     }
 
-    // 🔒 GLOBAL RULE: only ONE active chat per user
-    const active = await pool.query(
-      `SELECT id FROM conversations
-       WHERE sender_id = $1
-       AND status = 'active'
-       LIMIT 1`,
-      [to],
-    );
-
-    if (active.rows.length > 0 && active.rows[0].id !== conversation.id) {
-      return res.status(403).json({
-        error: "User is active in another department",
-      });
-    }
-
     // =========================
-    // 🔐 ROLE LOGIC
+    // 🔐 ROLE LOGIC (NEW)
     // =========================
 
     // 👨‍💻 SUPPORT
     if (user.role === "support") {
-      if (!conversation.assigned_to) {
-        return res.status(403).json({
-          error: "Chat is not assigned yet",
-        });
-      }
-
-      if (conversation.assigned_to !== user.id) {
-        return res.status(403).json({
-          error: "Assigned to another agent",
-        });
-      }
-
+      // dept + country restriction
       if (
         user.department_id !== conversation.department_id ||
         user.country_id !== conversation.country_id
@@ -95,6 +73,51 @@ router.post("/reply", async (req, res) => {
         return res.status(403).json({
           error: "Unauthorized for this chat",
         });
+      }
+
+      // ❌ if assigned to admin/superadmin → hard block
+      if (
+        conversation.assigned_role === "admin" ||
+        conversation.assigned_role === "superadmin"
+      ) {
+        return res.status(403).json({
+          error: `Chat is handled by ${conversation.assigned_role} (${conversation.assigned_email})`,
+        });
+      }
+
+      // 🟢 if unassigned → auto assign
+      if (!conversation.assigned_to) {
+        await pool.query(
+          `UPDATE conversations
+           SET assigned_to = $1,
+               assigned_role = $2
+           WHERE id = $3`,
+          [user.id, user.role, conversation.id],
+        );
+      }
+
+      // 🔁 if assigned to another support
+      if (conversation.assigned_to && conversation.assigned_to !== user.id) {
+        const lastReply = conversation.last_agent_reply_at;
+
+        const isInactive =
+          !lastReply ||
+          new Date(lastReply) < new Date(Date.now() - 20 * 60 * 1000);
+
+        if (!isInactive) {
+          return res.status(403).json({
+            error: "Another support agent is active on this chat",
+          });
+        }
+
+        // ✅ takeover after inactivity
+        await pool.query(
+          `UPDATE conversations
+           SET assigned_to = $1,
+               assigned_role = $2
+           WHERE id = $3`,
+          [user.id, user.role, conversation.id],
+        );
       }
     }
 
@@ -105,16 +128,77 @@ router.post("/reply", async (req, res) => {
           error: "Wrong department",
         });
       }
+
+      // 🔥 takeover logic
+      if (
+        conversation.assigned_to &&
+        conversation.assigned_to !== user.id &&
+        !force
+      ) {
+        return res.status(409).json({
+          error: "Chat assigned to someone else",
+          takeover: true,
+          assigned_to: conversation.assigned_email,
+          assigned_role: conversation.assigned_role,
+        });
+      }
+
+      // ✅ assign to admin after takeover
+      if (!conversation.assigned_to || conversation.assigned_to !== user.id) {
+        await pool.query(
+          `UPDATE conversations
+           SET assigned_to = $1,
+               assigned_role = $2
+           WHERE id = $3`,
+          [user.id, user.role, conversation.id],
+        );
+      }
     }
 
-    // 👑 SUPERADMIN → no restriction
+    // 👑 SUPERADMIN
+    if (user.role === "superadmin") {
+      if (
+        conversation.assigned_to &&
+        conversation.assigned_to !== user.id &&
+        !force
+      ) {
+        return res.status(409).json({
+          error: "Chat assigned to someone else",
+          takeover: true,
+          assigned_to: conversation.assigned_email,
+          assigned_role: conversation.assigned_role,
+        });
+      }
 
+      // ✅ always assign to self
+      if (!conversation.assigned_to || conversation.assigned_to !== user.id) {
+        await pool.query(
+          `UPDATE conversations
+           SET assigned_to = $1,
+               assigned_role = $2
+           WHERE id = $3`,
+          [user.id, user.role, conversation.id],
+        );
+      }
+    }
+
+    // =========================
+    // 📤 SEND MESSAGE
     // =========================
 
     const cleanMessage = message.trim();
 
     await sendMessage(to, cleanMessage);
     await addMessage(to, "outgoing", cleanMessage);
+
+    // ⏱️ update activity tracking
+    await pool.query(
+      `UPDATE conversations
+       SET last_agent_reply_at = NOW(),
+           last_agent_id = $1
+       WHERE id = $2`,
+      [user.id, conversation.id],
+    );
 
     res.json({
       success: true,
@@ -129,7 +213,6 @@ router.post("/reply", async (req, res) => {
     });
   }
 });
-
 /**
  * 🔁 REOPEN CHAT
  */
@@ -208,7 +291,8 @@ router.post("/reopen", async (req, res) => {
  */
 router.post("/assign", async (req, res) => {
   const user = req.session.user;
-  const { conversation_id } = req.body;
+  const { conversation_id, force } = req.body;
+  // 🔥 force = true → confirmed takeover
 
   if (!user) {
     return res.status(401).json({ error: "Unauthorized" });
@@ -220,11 +304,15 @@ router.post("/assign", async (req, res) => {
 
   try {
     const convo = await pool.query(
-      `SELECT * FROM conversations WHERE id = $1`,
+      `SELECT c.*, u.role AS assigned_role, u.email AS assigned_email
+       FROM conversations c
+       LEFT JOIN users u ON c.assigned_to = u.id
+       WHERE c.id = $1`,
       [conversation_id],
     );
 
     const c = convo.rows[0];
+
     if (!c) {
       return res.status(404).json({ error: "Conversation not found" });
     }
@@ -236,8 +324,11 @@ router.post("/assign", async (req, res) => {
       });
     }
 
-    // 👨‍💻 SUPPORT → dept + country
+    // =========================
+    // 👨‍💻 SUPPORT RULES
+    // =========================
     if (user.role === "support") {
+      // dept + country check
       if (
         user.department_id !== c.department_id ||
         user.country_id !== c.country_id
@@ -246,23 +337,61 @@ router.post("/assign", async (req, res) => {
           error: "Cannot assign this chat",
         });
       }
+
+      // ❌ if already assigned
+      if (c.assigned_to) {
+        return res.status(403).json({
+          error: `Chat already assigned to ${c.assigned_email}`,
+        });
+      }
     }
 
-    // 🧑‍💼 ADMIN → dept only
+    // =========================
+    // 🧑‍💼 ADMIN RULES
+    // =========================
     if (user.role === "admin") {
       if (user.department_id !== c.department_id) {
         return res.status(403).json({
           error: "Wrong department",
         });
       }
+
+      // 🔥 if assigned to someone else → require takeover
+      if (c.assigned_to && c.assigned_to !== user.id && !force) {
+        return res.status(409).json({
+          error: "Chat already assigned",
+          takeover: true,
+          assigned_to: c.assigned_email,
+          assigned_role: c.assigned_role,
+        });
+      }
     }
+
+    // =========================
+    // 👑 SUPERADMIN RULES
+    // =========================
+    if (user.role === "superadmin") {
+      if (c.assigned_to && c.assigned_to !== user.id && !force) {
+        return res.status(409).json({
+          error: "Chat already assigned",
+          takeover: true,
+          assigned_to: c.assigned_email,
+          assigned_role: c.assigned_role,
+        });
+      }
+    }
+
+    // =========================
+    // ✅ ASSIGN CHAT
+    // =========================
 
     const result = await pool.query(
       `UPDATE conversations
-       SET assigned_to = $1
-       WHERE id = $2
-       RETURNING id, assigned_to`,
-      [user.id, conversation_id],
+       SET assigned_to = $1,
+           assigned_role = $2
+       WHERE id = $3
+       RETURNING id, assigned_to, assigned_role`,
+      [user.id, user.role, conversation_id],
     );
 
     res.json({

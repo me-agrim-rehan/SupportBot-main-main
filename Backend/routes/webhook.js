@@ -8,8 +8,9 @@ import { processMessage } from "../services/ai.js";
 import {
   getMessagesByConversationId,
   addMessage,
-  getOrCreateConversation, // ✅ ADD THIS
+  getOrCreateConversation,
 } from "../store/conversations.js";
+
 import { detectCountry } from "../services/country.js";
 
 const router = express.Router();
@@ -42,7 +43,7 @@ router.post("/", async (req, res) => {
     const from = message.from;
     const text = message.text.body;
 
-    // ✅ ensure single conversation
+    // ✅ ensure conversation exists
     await getOrCreateConversation(from);
 
     // 🌍 Detect country
@@ -52,12 +53,12 @@ router.post("/", async (req, res) => {
       await pool.query(
         `UPDATE conversations
          SET country_id = $1
-         WHERE sender_id = $2`, // ✅ FIXED
+         WHERE sender_id = $2`,
         [country.id, from],
       );
     }
 
-    // 💾 Save user message
+    // 💾 Save incoming
     await addMessage(from, "incoming", text);
 
     // 🤖 AI response
@@ -67,7 +68,7 @@ router.post("/", async (req, res) => {
     // 💾 Save bot reply
     await addMessage(from, "outgoing", reply);
 
-    // 📤 Send message
+    // 📤 Send
     await sendMessage(from, reply);
   } catch (err) {
     console.error("Webhook error:", err);
@@ -75,7 +76,7 @@ router.post("/", async (req, res) => {
 });
 
 /**
- * ✅ GET CONVERSATIONS (FINAL)
+ * ✅ GET CONVERSATIONS (HIERARCHY VERSION)
  */
 router.get("/conversations", async (req, res) => {
   const user = req.session.user;
@@ -88,51 +89,58 @@ router.get("/conversations", async (req, res) => {
     let query;
     let params = [];
 
-    // 👑 SUPERADMIN → ALL
+    // 👑 SUPERADMIN → EVERYTHING
     if (user.role === "superadmin") {
       query = `
-        SELECT c.*, MAX(c.created_at) as last_time
+        SELECT 
+          c.*,
+          u.name AS assigned_name,
+          u.role AS assigned_role,
+          u.email AS assigned_email
         FROM conversations c
-        GROUP BY c.id
-        ORDER BY last_time DESC
+        LEFT JOIN users u ON c.assigned_to = u.id
+        ORDER BY c.created_at DESC
       `;
     }
 
-    // 🧑‍💼 ADMIN → department only (all chats)
+    // 🧑‍💼 ADMIN → ALL in department
     else if (user.role === "admin") {
       query = `
-        SELECT c.*, MAX(c.created_at) as last_time
+        SELECT 
+          c.*,
+          u.name AS assigned_name,
+          u.role AS assigned_role,
+          u.email AS assigned_email
         FROM conversations c
+        LEFT JOIN users u ON c.assigned_to = u.id
         WHERE c.department_id = $1
-        GROUP BY c.id
-        ORDER BY last_time DESC
+        ORDER BY c.created_at DESC
       `;
       params = [user.department_id];
     }
 
-    // 👨‍💻 SUPPORT → strict filtering
+    // 👨‍💻 SUPPORT → hierarchy visibility
     else if (user.role === "support") {
       query = `
-        SELECT c.*, MAX(c.created_at) as last_time
+        SELECT 
+          c.*,
+          u.name AS assigned_name,
+          u.role AS assigned_role,
+          u.email AS assigned_email
         FROM conversations c
+        LEFT JOIN users u ON c.assigned_to = u.id
         WHERE c.department_id = $1
-AND c.country_id = $2
-AND (
-  c.status = 'active'
-  OR (
-    c.status = 'ended'
-    AND c.assigned_to = $3
-    AND c.ended_at > NOW() - INTERVAL '48 hours'
-  )
-)
-AND (
-  c.assigned_to = $3
-  OR c.assigned_to IS NULL
-)
-        GROUP BY c.id
-        ORDER BY last_time DESC
+        AND c.country_id = $2
+        AND (
+          c.status = 'active'
+          OR (
+            c.status = 'ended'
+            AND c.ended_at > NOW() - INTERVAL '48 hours'
+          )
+        )
+        ORDER BY c.created_at DESC
       `;
-      params = [user.department_id, user.country_id, user.id];
+      params = [user.department_id, user.country_id];
     }
 
     const result = await pool.query(query, params);
@@ -143,19 +151,29 @@ AND (
     res.status(500).json({ error: "Failed to fetch conversations" });
   }
 });
+
+/**
+ * ✅ GET MESSAGES
+ */
 router.get("/conversations/:id/messages", async (req, res) => {
   const { id } = req.params;
 
-  const messages = await pool.query(
-    `
-    SELECT direction, text, created_at
-    FROM messages
-    WHERE conversation_id = $1
-    ORDER BY created_at ASC
-    `,
-    [id],
-  );
+  try {
+    const messages = await pool.query(
+      `
+      SELECT direction, text, created_at
+      FROM messages
+      WHERE conversation_id = $1
+      ORDER BY created_at ASC
+      `,
+      [id],
+    );
 
-  res.json(messages.rows);
+    res.json(messages.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to fetch messages" });
+  }
 });
+
 export default router;
