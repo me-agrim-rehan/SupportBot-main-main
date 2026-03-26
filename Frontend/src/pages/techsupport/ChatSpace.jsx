@@ -15,135 +15,113 @@ function ChatSpace() {
   const [selectedChat, setSelectedChat] = useState(null);
   const [messages, setMessages] = useState([]);
   const [message, setMessage] = useState("");
-  const [loading, setLoading] = useState(false);
+
+  const [modal, setModal] = useState(null); // 🔥 custom modal
 
   const currentUser = JSON.parse(localStorage.getItem("user"));
 
   // 🔁 Load conversations
   useEffect(() => {
     const loadConversations = async () => {
-      try {
-        const data = await fetchConversations();
-        setConversations(Array.isArray(data) ? data : []);
-      } catch (err) {
-        console.error("Failed to load conversations:", err);
-      }
+      const data = await fetchConversations();
+      setConversations(Array.isArray(data) ? data : []);
     };
 
     loadConversations();
     const interval = setInterval(loadConversations, 3000);
-
     return () => clearInterval(interval);
   }, []);
 
   // 🔥 Load messages
   const handleSelectChat = async (chat) => {
     setSelectedChat(chat);
-
-    try {
-      const data = await fetchMessages(chat.id);
-      setMessages(data);
-    } catch (err) {
-      console.error("Failed to load messages", err);
-    }
+    const data = await fetchMessages(chat.id);
+    setMessages(data);
   };
 
-  // 🧠 Chat state logic
+  // 🧠 RULE ENGINE
   const getChatState = () => {
     if (!selectedChat) return {};
 
     const isMine = selectedChat.assigned_to === currentUser?.id;
     const isUnassigned = !selectedChat.assigned_to;
 
+    const isAdminOwned =
+      selectedChat.assigned_role === "admin" ||
+      selectedChat.assigned_role === "superadmin";
+
     return {
       isMine,
       isUnassigned,
-      canReply:
-        !isEnded && (isUnassigned || isMine || currentUser?.role !== "support"),
+
       isBlocked:
-        selectedChat.assigned_to && !isMine && currentUser?.role === "support",
+        currentUser.role === "support" &&
+        selectedChat.assigned_to &&
+        !isMine &&
+        isAdminOwned,
+
+      canReply:
+        !isEnded && (isUnassigned || isMine || currentUser.role !== "support"),
+
+      disableAll: false, // 🔥 allow takeover UI always
     };
   };
 
-  // 📤 Send reply (with takeover support)
-  const handleSendReply = async () => {
-    if (!selectedChat || !message.trim()) return;
+  const isEnded = selectedChat?.status === "ended";
+  const chatState = getChatState();
+
+  // 🔥 MODAL HELPER
+  const openModal = (text, action) => {
+    setModal({ text, action });
+  };
+
+  const closeModal = () => setModal(null);
+
+  // 📤 SEND
+  const handleSendReply = async (force = false) => {
+    if (!message.trim()) return;
 
     try {
-      setLoading(true);
-
-      await sendReply(selectedChat.sender_id, message);
-
+      await sendReply(selectedChat.sender_id, message, force);
       setMessage("");
 
       const data = await fetchMessages(selectedChat.id);
       setMessages(data);
     } catch (error) {
       if (error?.takeover) {
-        const confirmTakeover = window.confirm(
-          `Chat assigned to ${error.assigned_to} (${error.assigned_role}). Take over?`,
+        openModal(`Take over chat from ${error.assigned_role}?`, () =>
+          handleSendReply(true),
         );
-
-        if (confirmTakeover) {
-          await sendReply(selectedChat.sender_id, message, true);
-        }
-      } else {
-        alert(error?.error || "Failed to send reply");
       }
-    } finally {
-      setLoading(false);
     }
   };
 
-  // 🔚 End chat
-  const handleEnd = async () => {
-    if (!selectedChat) return;
-
+  // 🟢 ASSIGN
+  const handleAssign = async (force = false) => {
     try {
-      await endSession(selectedChat.id);
-      alert("Chat ended");
-    } catch (error) {
-      alert(error?.error || "Failed to end chat");
-    }
-  };
-
-  // 🟢 Assign chat (with takeover)
-  const handleAssign = async () => {
-    if (!selectedChat) return;
-
-    try {
-      await assignChat(selectedChat.id);
-      alert("Assigned to you");
+      await assignChat(selectedChat.id, force);
     } catch (err) {
       if (err?.takeover) {
-        const confirmTakeover = window.confirm(
-          `Chat assigned to ${err.assigned_to} (${err.assigned_role}). Take over?`,
+        openModal(`Take over chat from ${err.assigned_role}?`, () =>
+          handleAssign(true),
         );
-
-        if (confirmTakeover) {
-          await assignChat(selectedChat.id, true);
-          alert("Taken over");
-        }
-      } else {
-        alert(err?.error || "Assign failed");
       }
     }
   };
 
-  // 🔁 Reopen chat
-  const handleReopen = async () => {
-    if (!selectedChat) return;
-
-    try {
-      await reopenChat(selectedChat.id);
-      alert("Chat reopened");
-    } catch (err) {
-      alert(err?.error || "Reopen failed");
-    }
+  // 🔚 END
+  const handleEnd = () => {
+    openModal("End this chat?", async () => {
+      await endSession(selectedChat.id);
+    });
   };
 
-  const isEnded = selectedChat?.status === "ended";
-  const chatState = getChatState();
+  // 🔁 REOPEN
+  const handleReopen = () => {
+    openModal("Reopen this chat?", async () => {
+      await reopenChat(selectedChat.id);
+    });
+  };
 
   return (
     <div className={styles.container}>
@@ -151,28 +129,33 @@ function ChatSpace() {
       <div className={styles.sidebar}>
         <h3 className={styles.sidebarTitle}>Conversations</h3>
 
-        {conversations.map((chat) => (
-          <div
-            key={chat.id}
-            className={`${styles.userItem} ${
-              selectedChat?.id === chat.id ? styles.activeUser : ""
-            }`}
-            onClick={() => handleSelectChat(chat)}
-          >
-            <div>
-              {chat.sender_id}
+        {conversations.map((chat) => {
+          const isOwnedByOther =
+            chat.assigned_to && chat.assigned_to !== currentUser?.id;
 
-              {chat.assigned_role && (
-                <small style={{ display: "block", fontSize: 12 }}>
-                  {chat.assigned_role}
-                </small>
-              )}
+          return (
+            <div
+              key={chat.id}
+              className={`${styles.userItem} ${
+                selectedChat?.id === chat.id ? styles.activeUser : ""
+              } ${isOwnedByOther ? styles.lockedChat : ""}`}
+              onClick={() => handleSelectChat(chat)}
+            >
+              <div>
+                {chat.sender_id}
+
+                {chat.unread && <span className={styles.unreadDot}></span>}
+
+                {chat.assigned_role && (
+                  <small className={styles.roleTag}>{chat.assigned_role}</small>
+                )}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
-      {/* Chat Section */}
+      {/* Chat */}
       <div className={styles.chat}>
         <div className={styles.chatHeader}>
           {selectedChat ? (
@@ -186,15 +169,12 @@ function ChatSpace() {
 
                 {selectedChat.assigned_to ? (
                   <span className={styles.assignedBadge}>
-                    Assigned to: {selectedChat.assigned_name} (
-                    {selectedChat.assigned_role})
+                    {selectedChat.assigned_role}
                   </span>
                 ) : (
                   <span className={styles.unassigned}>Unassigned</span>
                 )}
               </div>
-
-              {isEnded && <span> (Ended)</span>}
             </>
           ) : (
             <h3>Select conversation</h3>
@@ -221,21 +201,30 @@ function ChatSpace() {
           })}
         </div>
 
-        {/* ⚠️ Warning for blocked support */}
+        {/* Warning */}
         {selectedChat && chatState.isBlocked && (
           <div className={styles.warning}>
-            ⚠️ This chat is handled by {selectedChat.assigned_role} (
-            {selectedChat.assigned_email}). Contact your admin.
+            ⚠️ Chat handled by {selectedChat.assigned_role}
           </div>
         )}
 
         {/* Actions */}
         <div className={styles.actions}>
-          <button onClick={handleAssign}>Assign</button>
-          <button onClick={handleReopen} disabled={!isEnded}>
+          <button onClick={handleAssign} disabled={chatState.disableAll}>
+            Assign
+          </button>
+
+          <button
+            onClick={handleReopen}
+            disabled={!isEnded || chatState.disableAll}
+          >
             Reopen
           </button>
-          <button onClick={handleEnd} disabled={isEnded}>
+
+          <button
+            onClick={handleEnd}
+            disabled={isEnded || chatState.disableAll}
+          >
             End
           </button>
         </div>
@@ -244,23 +233,40 @@ function ChatSpace() {
         <div className={styles.inputBox}>
           <input
             className={styles.input}
-            placeholder="Type message..."
             value={message}
             onChange={(e) => setMessage(e.target.value)}
-            disabled={
-              !selectedChat || loading || isEnded || !chatState.canReply
-            }
+            disabled={!chatState.canReply}
           />
 
           <button
             className={styles.sendBtn}
-            onClick={handleSendReply}
-            disabled={loading || isEnded || !chatState.canReply}
+            onClick={() => handleSendReply()}
+            disabled={!chatState.canReply}
           >
-            {loading ? "Sending..." : "Send"}
+            Send
           </button>
         </div>
       </div>
+
+      {/* 🔥 MODAL */}
+      {modal && (
+        <div className={styles.modalOverlay}>
+          <div className={styles.modalBox}>
+            <p>{modal.text}</p>
+            <div className={styles.modalActions}>
+              <button
+                onClick={() => {
+                  modal.action();
+                  closeModal();
+                }}
+              >
+                Confirm
+              </button>
+              <button onClick={closeModal}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

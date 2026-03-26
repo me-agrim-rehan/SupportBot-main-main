@@ -3,15 +3,15 @@ import API from "./api";
 /* ========================
    SEND AGENT MESSAGE
 ======================== */
-export const sendReply = async (to, message) => {
+export const sendReply = async (to, message, force = false) => {
   const res = await API.post("/agent/reply", {
     to,
     message,
+    force, // 🔥 ADD THIS
   });
 
   return res.data;
 };
-
 /* ========================
    END CHAT
 ======================== */
@@ -26,9 +26,10 @@ export const endSession = async (conversation_id) => {
 /* ========================
    ASSIGN CHAT
 ======================== */
-export const assignChat = async (conversation_id) => {
+export const assignChat = async (conversation_id, force = false) => {
   const res = await API.post("/agent/assign", {
     conversation_id,
+    force, // 🔥 added here
   });
 
   return res.data;
