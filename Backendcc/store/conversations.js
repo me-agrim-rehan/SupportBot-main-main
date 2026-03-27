@@ -62,12 +62,13 @@ export async function createConversation(phone) {
 ============================== */
 export async function getOrCreateConversation(phone) {
   try {
-    // 🔍 check existing conversation
+    // ✅ Get existing ACTIVE conversation (no department condition!)
     const existing = await pool.query(
       `SELECT id FROM conversations
-   WHERE sender_id = $1
-   ORDER BY created_at DESC
-   LIMIT 1`,
+       WHERE sender_id = $1
+       AND status = 'active'
+       ORDER BY created_at DESC
+       LIMIT 1`,
       [phone],
     );
 
@@ -75,16 +76,16 @@ export async function getOrCreateConversation(phone) {
       return existing.rows[0].id;
     }
 
-    // ➕ create new
+    // 🆕 Create NEW conversation (only if none active)
     const id = randomUUID();
 
     await pool.query(
-      `INSERT INTO conversations (id, sender_id, message)
-       VALUES ($1, $2, $3)`,
-      [id, phone, "New conversation"],
+      `INSERT INTO conversations (id, sender_id, status, started_at)
+       VALUES ($1, $2, 'active', NOW())`,
+      [id, phone],
     );
 
-    console.log("🆕 New conversation:", id);
+    console.log("🆕 New conversation created:", id);
 
     return id;
   } catch (err) {
@@ -102,7 +103,7 @@ export async function addMessage(
   direction,
   text,
   whatsappMessageId = null,
-  status = null
+  status = null,
 ) {
   try {
     const conversationId = await getOrCreateConversation(phone);
@@ -111,7 +112,7 @@ export async function addMessage(
       `INSERT INTO messages 
        (conversation_id, direction, text, whatsapp_message_id, status)
        VALUES ($1, $2, $3, $4, $5)`,
-      [conversationId, direction, text, whatsappMessageId, status]
+      [conversationId, direction, text, whatsappMessageId, status],
     );
 
     console.log("✅ Saved:", phone, direction, "→", conversationId);
@@ -157,46 +158,36 @@ export function startHumanSession(phone, department_id) {
 ============================== */
 export async function assignDepartment(phone, department_id) {
   try {
-    // 🔒 END all previous active chats
-    await pool.query(
-      `UPDATE conversations
-       SET status = 'ended',
-           ended_at = NOW()
-       WHERE sender_id = $1
-       AND status = 'active'`,
-      [phone],
-    );
-
-    // 🎯 get latest conversation
-    const conv = await pool.query(
+    // 🔍 Get current active conversation
+    const res = await pool.query(
       `SELECT id FROM conversations
        WHERE sender_id = $1
+       AND status = 'active'
        ORDER BY created_at DESC
        LIMIT 1`,
       [phone],
     );
 
-    if (conv.rows.length === 0) return;
+    const conversationId = res.rows[0]?.id;
 
-    const conversationId = conv.rows[0].id;
+    if (!conversationId) return;
 
-    // 🟢 START NEW HUMAN CHAT
+    // ✅ JUST UPDATE SAME CONVERSATION
     await pool.query(
       `UPDATE conversations
        SET department_id = $1,
-           status = 'active',
-           started_at = NOW(),
-           ended_at = NULL
+           started_at = NOW()
        WHERE id = $2`,
       [department_id, conversationId],
     );
 
-    console.log("🏷️ Department assigned:", department_id, "→", conversationId);
+    console.log("✅ Conversation assigned to department:", conversationId);
+
+    return conversationId;
   } catch (err) {
-    console.error("❌ Department update error:", err.message);
+    console.error("❌ assignDepartment error:", err.message);
   }
 }
-
 /* ==============================
    Validate Department
 ============================== */
