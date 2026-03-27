@@ -1,3 +1,4 @@
+// Frontend/src/API/ChatAPI.js
 import API from "./api";
 
 /* ========================
@@ -60,7 +61,6 @@ export const fetchConversations = async () => {
 export const fetchMessages = async (conversation_id) => {
   const res = await API.get(
     `/webhook/conversations/${conversation_id}/messages`,
-    
   );
 
   return res.data;
