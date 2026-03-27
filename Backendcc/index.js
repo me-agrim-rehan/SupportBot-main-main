@@ -8,6 +8,10 @@ import superadminRoutes from "./routes/loginroutes/superadmin.js";
 import session from "express-session";
 import { loadCountries } from "./services/country.js";
 import metaroutes from "./routes/meta.js";
+import { pool } from "./db.js";
+import pgSession from "connect-pg-simple";
+
+const PgSession = pgSession(session);
 dotenv.config();
 
 const app = express();
@@ -25,13 +29,21 @@ app.use(
 );
 app.use(
   session({
-    secret: process.env.SESSION_SECRET || "secret",
+    name: "supportbot.sid", // 🔥 custom cookie name
+    store: new PgSession({
+      pool,
+      tableName: "user_sessions",
+      pruneSessionInterval: 60 * 15, // 🔥 cleanup
+    }),
+    secret: process.env.SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
+    rolling: true,
     cookie: {
       httpOnly: true,
-      secure: false,
-      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+      maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
     },
   }),
 );

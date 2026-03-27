@@ -12,9 +12,16 @@ router.post("/login", async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    // 🔥 JOIN departments to get name
+    // 🔒 Basic validation
+    if (!email || !password) {
+      return res.status(400).json({ error: "Email and password are required" });
+    }
+
+    // 🔍 Fetch user with department
     const result = await pool.query(
-      `SELECT u.*, d.name AS department_name
+      `SELECT u.id, u.name, u.email, u.password, u.role, 
+              u.department_id, u.country_id,
+              d.name AS department_name
        FROM users u
        LEFT JOIN departments d ON u.department_id = d.id
        WHERE u.email = $1`,
@@ -23,38 +30,52 @@ router.post("/login", async (req, res) => {
 
     const user = result.rows[0];
 
+    // 🔒 Avoid user enumeration
     if (!user) {
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
+    // 🔐 Compare password
     const isMatch = await bcrypt.compare(password, user.password);
 
     if (!isMatch) {
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
-    // 🔥 CREATE SESSION (UPDATED)
-    req.session.user = {
+    // 🧠 Build session payload (minimal & safe)
+    const sessionUser = {
       id: user.id,
       name: user.name,
       role: user.role,
-      department_id: user.department_id, // ✅ ID
-      department: user.department_name, // ✅ readable name
+      department_id: user.department_id,
+      department: user.department_name,
       country_id: user.country_id,
     };
 
-    console.log("✅ Session created:", req.session.user);
+    // 🔥 Assign session
+    req.session.user = sessionUser;
 
-    res.json({
-      success: true,
-      user: req.session.user,
+    // 🔥 Explicitly save session (important for reliability)
+    req.session.save((err) => {
+      if (err) {
+        console.error("❌ Session save error:", err);
+        return res.status(500).json({ error: "Session creation failed" });
+      }
+
+      // ✅ Success response
+      return res.status(200).json({
+        success: true,
+        user: sessionUser,
+      });
     });
   } catch (err) {
-    console.error("Login error:", err.message);
-    res.status(500).json({ error: "Login failed" });
+    console.error("❌ Login error:", err);
+
+    return res.status(500).json({
+      error: "Internal server error",
+    });
   }
 });
-
 /**
  * 👤 GET CURRENT USER
  */
