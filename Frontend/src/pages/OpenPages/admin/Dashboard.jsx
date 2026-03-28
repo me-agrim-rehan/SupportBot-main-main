@@ -45,6 +45,14 @@ function Dashboard() {
             <h3>Create User</h3>
             <p>Add support agents or admins</p>
           </div>
+          <div
+            className={styles.card}
+            onClick={() => navigate("/compose")}
+          >
+            <h3>Compose Message</h3>
+            <p>Send single or bulk messages</p>
+          </div>
+
         </div>
       </div>
     </div>

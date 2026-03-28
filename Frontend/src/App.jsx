@@ -4,6 +4,7 @@ import Login from "./pages/OpenPages/Login";
 import CreateUser from "./pages/OpenPages/admin/CreateUser";
 import ProtectedRoute from "./ProtectedRoute";
 import Dashboard from "./pages/OpenPages/admin/Dashboard";
+import Compose from "./pages/techsupport/Compose";
 function App() {
   return (
     <Router>
@@ -37,6 +38,15 @@ function App() {
           element={
             <ProtectedRoute allowedRoles={["support", "admin", "superadmin"]}>
               <ChatSpace />
+            </ProtectedRoute>
+          }
+        />
+        {/* COMPOSE → ALL */}
+        <Route
+          path="/compose"
+          element={
+            <ProtectedRoute allowedRoles={["support", "admin", "superadmin"]}>
+              <Compose />
             </ProtectedRoute>
           }
         />

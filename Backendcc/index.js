@@ -10,7 +10,7 @@ import { loadCountries } from "./services/country.js";
 import metaroutes from "./routes/meta.js";
 import { pool } from "./db.js";
 import pgSession from "connect-pg-simple";
-
+import composeRoutes from "./routes/compose/compose.js";
 const PgSession = pgSession(session);
 dotenv.config();
 
@@ -59,6 +59,7 @@ app.use("/agent", agentRoutes);
 app.use("/auth", authRoutes);
 app.use("/superadmin", superadminRoutes);
 app.use("/meta", metaroutes);
+app.use("/compose", composeRoutes);
 
 app.use((req, res) => {
   res.status(404).json({

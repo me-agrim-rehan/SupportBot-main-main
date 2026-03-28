@@ -4,10 +4,12 @@
     "bcrypt": "^6.0.0",
     "connect-pg-simple": "^10.0.0",
     "cors": "^2.8.6",
+    "csv-parser": "^3.2.0",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "express-session": "^1.19.0",
     "libphonenumber-js": "^1.12.40",
+    "multer": "^2.1.1",
     "nodemon": "^3.1.14",
     "openai": "^6.32.0",
     "pg": "^8.20.0"
