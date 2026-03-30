@@ -10,26 +10,56 @@ import { addMessage } from "../../store/conversations.js";
 import { requireAdmin } from "../../middleware/auth.js";
 
 const router = express.Router();
-
-// 📁 file upload config
 const upload = multer({ dest: "uploads/" });
 
 /**
- * 📤 SEND SINGLE MESSAGE
+ * 🔥 SEND (single OR multiple numbers)
  */
 router.post("/send", requireAdmin, async (req, res) => {
-    const { to, message } = req.body;
+    let { to, message } = req.body;
 
     if (!to || !message) {
         return res.status(400).json({ error: "to and message required" });
     }
 
+    // 👉 support multiple numbers (comma / newline / space)
+    let numbers = [];
+
+    if (Array.isArray(to)) {
+        numbers = to;
+    } else {
+        numbers = to
+            .split(/[\n, ]+/)
+            .map((n) => n.trim())
+            .filter(Boolean);
+    }
+
+    const results = [];
+
     try {
-        const messageId = await sendMessage(to, message);
+        for (const number of numbers) {
+            try {
+                const messageId = await sendMessage(number, message);
 
-        await addMessage(to, "outgoing", message, messageId, "sent");
+                await addMessage(
+                    number,
+                    "outgoing",
+                    message,
+                    messageId,
+                    "sent"
+                );
 
-        res.json({ success: true });
+                results.push({ number, status: "sent" });
+            } catch (err) {
+                results.push({ number, status: "failed" });
+            }
+        }
+
+        res.json({
+            success: true,
+            total: numbers.length,
+            results,
+        });
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: "Failed to send" });
@@ -37,11 +67,7 @@ router.post("/send", requireAdmin, async (req, res) => {
 });
 
 /**
- * 📢 BULK SEND (CSV)
- * CSV format:
- * phone
- * 919876543210
- * 918888888888
+ * 📢 BULK CSV (unchanged)
  */
 router.post(
     "/bulk",
@@ -59,7 +85,6 @@ router.post(
         try {
             const numbers = [];
 
-            // 📥 read CSV
             await new Promise((resolve, reject) => {
                 fs.createReadStream(req.file.path)
                     .pipe(csvParser())
@@ -70,7 +95,6 @@ router.post(
                     .on("error", reject);
             });
 
-            // 📤 send messages
             for (const number of numbers) {
                 try {
                     const messageId = await sendMessage(number, message);
@@ -84,12 +108,12 @@ router.post(
                     );
 
                     results.push({ number, status: "sent" });
-                } catch (err) {
+                } catch {
                     results.push({ number, status: "failed" });
                 }
             }
 
-            fs.unlinkSync(req.file.path); // 🧹 cleanup
+            fs.unlinkSync(req.file.path);
 
             res.json({
                 success: true,

@@ -1,38 +1,50 @@
 import { useState } from "react";
 import styles from "./styles/Compose.module.css";
-import API from "../../API/api"; // ✅ use your axios instance
+import API from "../../API/api";
 
 function Compose() {
+  const [numbers, setNumbers] = useState("");
   const [message, setMessage] = useState("");
-  const [number, setNumber] = useState("");
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  const sendSingle = async () => {
-    if (!number || !message) return alert("Fill all fields");
+  // 🔒 only digits, comma, space, newline
+  const cleanNumbers = (value) => {
+    return value.replace(/[^\d\n, ]/g, "");
+  };
+
+  // 🔥 IMPORTANT: assume user gives FULL number (with country code)
+  const formatNumbers = () => {
+    return numbers
+      .split(/[\n, ]+/)
+      .map((n) => n.replace(/\D/g, "")) // only digits
+      .filter(Boolean);
+  };
+
+  const numberList = formatNumbers();
+
+  const handleSend = async () => {
+    if (!numberList.length || !message) return alert("Add numbers + message");
 
     try {
       setLoading(true);
 
       await API.post("/compose/send", {
-        to: number,
+        to: numberList,
         message,
       });
 
-      alert("Message sent");
+      alert(`Sent to ${numberList.length} users ✅`);
       setMessage("");
-      setNumber("");
-    } catch (err) {
-      console.error(err);
-      alert("Failed to send");
+    } catch {
+      alert("Failed ❌");
     } finally {
       setLoading(false);
     }
   };
 
-  const sendBulk = async () => {
-    if (!file) return alert("Upload CSV");
-    if (!message) return alert("Enter message");
+  const handleBulk = async () => {
+    if (!file || !message) return alert("Upload CSV + message");
 
     try {
       setLoading(true);
@@ -41,18 +53,13 @@ function Compose() {
       formData.append("file", file);
       formData.append("message", message);
 
-      await API.post("/compose/bulk", formData, {
-        headers: {
-          "Content-Type": "multipart/form-data",
-        },
-      });
+      await API.post("/compose/bulk", formData);
 
-      alert("Bulk messages sent");
+      alert("CSV sent ✅");
       setFile(null);
       setMessage("");
-    } catch (err) {
-      console.error(err);
-      alert("Bulk failed");
+    } catch {
+      alert("CSV failed ❌");
     } finally {
       setLoading(false);
     }
@@ -60,46 +67,58 @@ function Compose() {
 
   return (
     <div className={styles.container}>
-      <h2>📢 Compose Message</h2>
+      {/* SIDEBAR */}
+      <div className={styles.sidebar}>
+        <h2>Recipients</h2>
 
-      <div className={styles.card}>
-        <h3>Send to One</h3>
+        <div className={styles.section}>
+          <label>Numbers (with country code)</label>
+          <textarea
+            value={numbers}
+            onChange={(e) => setNumbers(cleanNumbers(e.target.value))}
+            placeholder="Example:
+91949501021
+14155552671"
+          />
+        </div>
 
-        <input
-          placeholder="Phone number (e.g. 9198...)"
-          value={number}
-          onChange={(e) => setNumber(e.target.value)}
-        />
+        <div className={styles.count}>{numberList.length} recipients</div>
 
-        <textarea
-          placeholder="Type your message..."
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-        />
+        <div className={styles.section}>
+          <input
+            type="file"
+            accept=".csv"
+            onChange={(e) => setFile(e.target.files[0])}
+          />
 
-        <button onClick={sendSingle} disabled={loading}>
-          Send
-        </button>
+          <button onClick={handleBulk} disabled={loading}>
+            Send CSV
+          </button>
+        </div>
       </div>
 
-      <div className={styles.card}>
-        <h3>Bulk (CSV Upload)</h3>
+      {/* CHAT */}
+      <div className={styles.chat}>
+        <div className={styles.header}>
+          <h2>Compose Message</h2>
+          <span>{numberList.length} selected</span>
+        </div>
 
-        <input
-          type="file"
-          accept=".csv"
-          onChange={(e) => setFile(e.target.files[0])}
-        />
+        <div className={styles.empty}>
+          <p>Start typing your message below</p>
+        </div>
 
-        <textarea
-          placeholder="Message for all users..."
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-        />
+        <div className={styles.inputBar}>
+          <input
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            placeholder="Type your message..."
+          />
 
-        <button onClick={sendBulk} disabled={loading}>
-          Send Bulk
-        </button>
+          <button onClick={handleSend} disabled={loading}>
+            Send
+          </button>
+        </div>
       </div>
     </div>
   );
