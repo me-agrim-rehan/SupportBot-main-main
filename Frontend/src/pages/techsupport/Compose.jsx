@@ -5,26 +5,27 @@ import API from "../../API/api";
 function Compose() {
   const [numbers, setNumbers] = useState("");
   const [message, setMessage] = useState("");
-  const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  // 🔒 only digits, comma, space, newline
+  // 🔒 allow only digits, comma, space, newline
   const cleanNumbers = (value) => {
     return value.replace(/[^\d\n, ]/g, "");
   };
 
-  // 🔥 IMPORTANT: assume user gives FULL number (with country code)
+  // 🔥 format numbers list
   const formatNumbers = () => {
     return numbers
       .split(/[\n, ]+/)
-      .map((n) => n.replace(/\D/g, "")) // only digits
+      .map((n) => n.replace(/\D/g, ""))
       .filter(Boolean);
   };
 
   const numberList = formatNumbers();
 
   const handleSend = async () => {
-    if (!numberList.length || !message) return alert("Add numbers + message");
+    if (!numberList.length || !message) {
+      return alert("Add numbers + message");
+    }
 
     try {
       setLoading(true);
@@ -35,31 +36,10 @@ function Compose() {
       });
 
       alert(`Sent to ${numberList.length} users ✅`);
+      setNumbers("");
       setMessage("");
     } catch {
       alert("Failed ❌");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleBulk = async () => {
-    if (!file || !message) return alert("Upload CSV + message");
-
-    try {
-      setLoading(true);
-
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("message", message);
-
-      await API.post("/compose/bulk", formData);
-
-      alert("CSV sent ✅");
-      setFile(null);
-      setMessage("");
-    } catch {
-      alert("CSV failed ❌");
     } finally {
       setLoading(false);
     }
@@ -76,25 +56,13 @@ function Compose() {
           <textarea
             value={numbers}
             onChange={(e) => setNumbers(cleanNumbers(e.target.value))}
-            placeholder="Example:
+            placeholder={`Example:
 91949501021
-14155552671"
+14155552671`}
           />
         </div>
 
         <div className={styles.count}>{numberList.length} recipients</div>
-
-        <div className={styles.section}>
-          <input
-            type="file"
-            accept=".csv"
-            onChange={(e) => setFile(e.target.files[0])}
-          />
-
-          <button onClick={handleBulk} disabled={loading}>
-            Send CSV
-          </button>
-        </div>
       </div>
 
       {/* CHAT */}
@@ -116,7 +84,7 @@ function Compose() {
           />
 
           <button onClick={handleSend} disabled={loading}>
-            Send
+            {loading ? "Sending..." : "Send"}
           </button>
         </div>
       </div>
