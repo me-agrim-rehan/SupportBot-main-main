@@ -498,9 +498,6 @@ router.post("/end", async (req, res) => {
   const user = req.session.user;
   const { conversation_id } = req.body;
 
-  // =========================
-  // ✅ VALIDATION
-  // =========================
   if (!user) {
     return res.status(401).json({ error: "Unauthorized" });
   }
@@ -512,12 +509,9 @@ router.post("/end", async (req, res) => {
   }
 
   try {
-    // =========================
-    // 📥 GET CONVERSATION
-    // =========================
     const convo = await pool.query(
       `SELECT * FROM conversations WHERE id = $1`,
-      [conversation_id],
+      [conversation_id]
     );
 
     const c = convo.rows[0];
@@ -532,9 +526,6 @@ router.post("/end", async (req, res) => {
       });
     }
 
-    // =========================
-    // 👨‍💻 SUPPORT RULES
-    // =========================
     if (user.role === "support") {
       if (
         c.assigned_to !== user.id ||
@@ -547,9 +538,6 @@ router.post("/end", async (req, res) => {
       }
     }
 
-    // =========================
-    // 🧑‍💼 ADMIN RULES
-    // =========================
     if (user.role === "admin") {
       if (user.department_id !== c.department_id) {
         return res.status(403).json({
@@ -558,23 +546,18 @@ router.post("/end", async (req, res) => {
       }
     }
 
-    // 👑 SUPERADMIN → allowed
-
-    // =========================
-    // 🔚 END CHAT (RACE SAFE)
-    // =========================
     const result = await pool.query(
       `UPDATE conversations
        SET status = 'ended',
            ended_at = NOW(),
-           last_agent_id = $2,   -- 🔥 who ended it
+           last_agent_id = $2,
            assigned_to = NULL,
            assigned_role = NULL,
-           last_agent_reply_at = NULL -- 🔥 reset timer
+           last_agent_reply_at = NULL
        WHERE id = $1
        AND status = 'active'
-       RETURNING id`,
-      [conversation_id, user.id],
+       RETURNING sender_id, department_id`,
+      [conversation_id, user.id]
     );
 
     if (result.rowCount === 0) {
@@ -583,14 +566,17 @@ router.post("/end", async (req, res) => {
       });
     }
 
-    // 🔁 RESET AI STATE HERE (ONLY HERE)
-    import("../services/ai.js").then(mod => {
-      if (mod.resetUserState) {
-        mod.resetUserState(c.sender_id);
-      }
-    });
+    const { sender_id } = result.rows[0];
 
-    return res.json({ success: true });
+    const { resetUserState } = await import("../services/ai.js");
+    resetUserState(sender_id);
+
+    const reply =
+      'This chat has been ended by the department. Please say "hey" to start a new conversation.';
+
+    const messageId = await sendMessage(sender_id, reply);
+
+    await addMessage(sender_id, "outgoing", reply, messageId, "sent");
 
     return res.json({ success: true });
   } catch (err) {
@@ -601,5 +587,3 @@ router.post("/end", async (req, res) => {
     });
   }
 });
-
-export default router;

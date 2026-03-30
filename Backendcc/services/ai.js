@@ -232,4 +232,5 @@ User message:
 export function resetUserState(user) {
   delete userState[user];
   delete predictedDept[user];
+  delete greetedUsers[user];
 }
