@@ -118,6 +118,47 @@ router.post("/", async (req, res) => {
     ========================= */
     setImmediate(async () => {
       try {
+        // ✅ CHECK IF HUMAN CHAT IS ACTIVE
+        const convoCheck = await pool.query(
+          `SELECT department_id, status 
+   FROM conversations
+   WHERE sender_id = $1
+   AND status = 'active'
+   ORDER BY created_at DESC
+   LIMIT 1`,
+          [from]
+        );
+
+        const convo = convoCheck.rows[0];
+
+        // 🚫 If assigned to department → HUMAN MODE → STOP AI
+        if (convo?.department_id) {
+          const lower = text.toLowerCase();
+
+          // ✅ allow re-entry trigger
+          const triggerWords = ["hr", "finance", "support", "department"];
+
+          const wantsNewDept = triggerWords.some(word =>
+            lower.includes(word)
+          );
+
+          if (!wantsNewDept) {
+            console.log("🤫 AI blocked (human active)");
+            return;
+          }
+
+          // 🔁 user wants new dept → reset conversation
+          await pool.query(
+            `UPDATE conversations
+     SET status = 'ended',
+         ended_at = NOW()
+     WHERE sender_id = $1
+     AND status = 'active'`,
+            [from]
+          );
+
+          console.log("🔁 Switching back to AI routing");
+        }
         const reply = await processMessage(from, text);
         if (!reply) return;
 

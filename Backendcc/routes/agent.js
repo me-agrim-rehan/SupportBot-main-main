@@ -583,6 +583,15 @@ router.post("/end", async (req, res) => {
       });
     }
 
+    // 🔁 RESET AI STATE HERE (ONLY HERE)
+    import("../services/ai.js").then(mod => {
+      if (mod.resetUserState) {
+        mod.resetUserState(c.sender_id);
+      }
+    });
+
+    return res.json({ success: true });
+
     return res.json({ success: true });
   } catch (err) {
     console.error("End chat error:", err.message);

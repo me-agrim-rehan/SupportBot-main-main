@@ -37,6 +37,10 @@ import { yesWords, noWords } from "../services/departments.js";
 ========================= */
 
 export async function processMessage(user, text) {
+  // 🚫 HARD BLOCK: if human is active, AI should not respond
+if (userState[user] === "human_active") {
+  return null;
+}
   const msg = text.toLowerCase().trim();
 
   
@@ -72,6 +76,7 @@ export async function processMessage(user, text) {
 
       startHumanSession(user, dept.id); // 🔥 ONLY CHANGE
 
+      userState[user] = "human_active";
       delete userState[user];
       delete predictedDept[user];
 
@@ -112,6 +117,7 @@ export async function processMessage(user, text) {
 
     startHumanSession(user, selectedDept.id); // 🔥 ONLY CHANGE
 
+    userState[user] = "human_active";
     delete userState[user];
     delete predictedDept[user];
 
@@ -222,4 +228,8 @@ User message:
 
     return departments.find((d) => d.name === "General Inquiry");
   }
+}
+export function resetUserState(user) {
+  delete userState[user];
+  delete predictedDept[user];
 }
